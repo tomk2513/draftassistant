@@ -61,7 +61,6 @@
   input[type=text]:focus,input[type=number]:focus,select:focus{border-color:var(--blue);}
   input#draftIdInput{width:190px;}
   input#slotInput{width:56px;}
-  input#usernameInput{width:110px;}
   button{
     background:var(--green);color:#04140b;border:none;font-weight:700;
     padding:7px 14px;border-radius:6px;cursor:pointer;letter-spacing:0.3px;
@@ -178,6 +177,9 @@
   .rec-empty,.muted-note{color:var(--dim);font-size:12px;font-family:'IBM Plex Mono',monospace;line-height:1.6;}
   .rc-preview{margin-top:8px;font-size:10.5px;color:var(--dim);line-height:1.5;}
   .rc-preview b{color:var(--text);font-weight:600;}
+  .rc-preview-label{margin-bottom:3px;}
+  .rc-preview-list{display:flex;flex-direction:column;gap:2px;}
+  .rc-preview-item{padding-left:2px;}
 
   .rc-tie-banner{
     display:flex;align-items:center;gap:7px;margin-bottom:8px;padding:7px 10px;border-radius:7px;
@@ -333,20 +335,8 @@
         <input type="text" id="draftIdInput" placeholder="e.g. 987654321012345678">
       </div>
       <div class="field">
-        <label>Username <span class="mono" style="opacity:.6">(optional)</span></label>
-        <input type="text" id="usernameInput" placeholder="sleeper handle">
-      </div>
-      <div class="field">
         <label>My Slot</label>
         <input type="number" id="slotInput" min="1" placeholder="#">
-      </div>
-      <div class="field">
-        <label>Scoring</label>
-        <select id="scoringSelect">
-          <option value="ppr">PPR</option>
-          <option value="half-ppr">Half PPR</option>
-          <option value="standard">Standard</option>
-        </select>
       </div>
       <div class="field">
         <label>ADP CSV <span class="mono" style="opacity:.6">(opponents)</span></label>
@@ -399,7 +389,7 @@
       <div class="steps">
         <b>1.</b> Open your draft in the Sleeper app or sleeper.com<br>
         <b>2.</b> Copy the number from the URL — draft/<b>&lt;draft_id&gt;</b><br>
-        <b>3.</b> Paste it above, add your username or slot number, hit Connect
+        <b>3.</b> Paste it above, add your slot number, hit Connect
       </div>
       <div class="err-box" id="errBox"></div>
     </div>
@@ -508,15 +498,15 @@
   // bounds how far a single lopsided position can push it either way, so
   // it can tip a close call toward the thinner position without ever
   // forcing positions to equal counts or overriding a clearly better pick.
-  const BALANCE_WEIGHT = 0.3;
-  const BALANCE_NEED_CAP = 0.6;
+  const BALANCE_WEIGHT = 0.45;
+  const BALANCE_NEED_CAP = 1.0;
   // Skip the balance nudge until there's enough of a roster to say
   // anything meaningful — with only 1-2 skill-position picks made, "this
   // position is behind the others" is just noise (of course it is, you've
   // barely picked anyone yet).
   const BALANCE_MIN_PICKS = 3;
   // Bench coverage: a THIRD, separate signal from BENCH_WEIGHT/BALANCE_WEIGHT
-  // above. Those two are deliberately light (0.2/0.3) so they act as
+  // above. Those two are deliberately kept lighter than starterNeed so they act as
   // tiebreakers, not strong pulls — which means a position can easily go the
   // entire draft with zero bench copies if value/scarcity elsewhere keeps
   // winning by a small margin. This term fires ONLY while a position has NO
@@ -532,8 +522,9 @@
   // is a separate, simpler signal that only looks at RB total vs WR total on
   // the whole squad and nudges whichever one is behind — capped and lightly
   // additive like every other need term here, not a hard equalizer.
-  const RBWR_PARITY_WEIGHT = 0.25;
-  const RBWR_PARITY_CAP = 1.5;
+  const RBWR_PARITY_WEIGHT = 0.45;
+  const RBWR_PARITY_POWER = 1.35; // >1 = convex: small gaps stay a light nudge, big gaps escalate faster than linear
+  const RBWR_PARITY_CAP = 3.0;
   const DEFAULT_FLEX_ELIGIBLE = ["RB","WR"]; // one shared FLEX slot, RB/WR only — no TE-flex
   const DEFAULT_FLEX_SLOTS = 1;
 
@@ -971,10 +962,10 @@
     if(S.adpIndex && S.adpIndex.rows.length) return S.adpIndex;
     if(loadCachedAdp()) return S.adpIndex;
     try{
-      const res = await fetch("adp.csv");
+      const res = await fetch("adp/defaultrank.csv");
       if(res.ok){
         const text = await res.text();
-        if(applyAdpText(text, "fetched")) return S.adpIndex;
+        if(applyAdpText(text, "default file")) return S.adpIndex;
       }
     }catch(e){ }
     setAdpStatus("not loaded — click \u201cLoad ADP CSV\u201d", false);
@@ -1039,6 +1030,19 @@
     }catch(e){ }
     return false;
   }
+  async function loadMyRankIndex(){
+    if(S.myRankIndex) return S.myRankIndex;
+    if(loadCachedMyRank()) return S.myRankIndex;
+    try{
+      const res = await fetch("adp/myrank.csv");
+      if(res.ok){
+        const text = await res.text();
+        if(applyMyRankText(text, "default file")) return S.myRankIndex;
+      }
+    }catch(e){ }
+    setMyRankStatus("not loaded — using ADP", false);
+    return null;
+  }
   function matchAdp(playerName, adpIndex, ctx){
     if(!adpIndex || !adpIndex.rows.length) return null;
     const norm = normName(playerName);
@@ -1102,10 +1106,10 @@
       const [data, adpIndex] = await Promise.all([
         fetchJSON(SLEEPER_API+"/players/nfl"),
         loadAdpIndex(),
+        loadMyRankIndex(),
       ]);
       S.players = data;
       S.adpIndex = adpIndex;
-      if(!S.myRankIndex) loadCachedMyRank();
       const myRankIndex = S.myRankIndex;
 
       const list = [];
@@ -1521,6 +1525,7 @@
   // fall back to the full picker if there's no remembered handle or its
   // permission can't be re-granted.
   async function connectLogFolder(forcePicker){
+    if(!S.debugMode) return;
     if(!window.showDirectoryPicker){
       alert("This browser/context can't grant folder access directly (needs Chrome or Edge served over https or localhost — a bare file:// page can't use it). The log will stay captured in memory — use \"Save Log Now\" to download it.");
       return;
@@ -1550,6 +1555,7 @@
   }
 
   async function flushDraftLog(forceDownloadFallback){
+    if(!S.debugMode) return;
     if(!S.draftLog) return;
     if(S.logWriteInFlight) return;
     S.logWriteInFlight = true;
@@ -1607,7 +1613,7 @@
         renderAll(); 
       }
 
-      if(S.draftLog){
+      if(S.draftLog && S.debugMode){
         logNewPicks();
         resolveRecommendationSnapshots();
         if(S.logDirHandle) flushDraftLog(false);   // live-write whenever a folder is connected
@@ -1934,7 +1940,12 @@
     const mine = counts[pos] || 0;
     const other = pos === "RB" ? (counts.WR || 0) : (counts.RB || 0);
     const gap = other - mine;
-    return Math.max(-RBWR_PARITY_CAP, Math.min(RBWR_PARITY_CAP, gap));
+    // Convex shaping (see RBWR_PARITY_POWER above): preserves sign, grows
+    // faster than linear as |gap| increases, so a squad that's drifted to
+    // e.g. 7 WR/3 RB gets pushed back on noticeably harder than one that's
+    // merely 4 WR/3 RB, instead of both maxing out the same capped nudge.
+    const shaped = Math.sign(gap) * Math.pow(Math.abs(gap), RBWR_PARITY_POWER);
+    return Math.max(-RBWR_PARITY_CAP, Math.min(RBWR_PARITY_CAP, shaped));
   }
 
   function positionNeedWeightFromCounts(counts, pos) {
@@ -3288,42 +3299,37 @@
       if(isStack) tags.push({t:"stack", label:`Stack (${p.team})`});
       if(isHandcuff) tags.push({t:"handcuff", label:`Handcuff (${p.team})`});
 
-      // Score breakdown for the stacked bar in the UI: same terms already
-      // computed above, just carried through instead of discarding them
-      // once they're folded into the single `score` number. Scarcity/value/
-      // lookahead are scaled by posModifier here (unlike the raw debug.*Term
-      // values below) so each segment reflects its actual contribution to
-      // `score`, and the segments sum exactly to `score` (bye-clash is the
-      // one negative term, so it's carried as a negative value rather than
-      // a bar segment).
-      const breakdown = [
-        { key:"need", label:"Need", value: needTerm, color:"#4f8cff" },
-        { key:"urgency", label:"Urgency", value: urgencyTerm, color:"#8a5cf6" },
-        { key:"scarcity", label:"Scarcity", value:(scarcityScore * 2.2) * posModifier, color:"#f5a623" },
-        { key:"value", label:"Value", value:(normValue * 2.5) * posModifier, color:"#2ecc71" },
-        { key:"lookahead", label:"Lookahead", value:(lookaheadValue * LOOKAHEAD_WEIGHT) * posModifier, color:"#17a2b8" },
-      ];
-      if(criticalBonus > 0) breakdown.push({ key:"critical", label:"Critical-loss floor", value:criticalBonus, color:"#e74c3c" });
-      if(downsideRiskBonus > 0) breakdown.push({ key:"downside", label:"Steep drop-off", value:downsideRiskBonus, color:"#c0392b" });
-      if(stackBonus > 0) breakdown.push({ key:"stack", label:"Stack bonus", value:stackBonus, color:"#e91e63" });
-      if(handcuffBonus > 0) breakdown.push({ key:"handcuff", label:"Handcuff bonus", value:handcuffBonus, color:"#ffc107" });
-      if(byeClashPenalty > 0) breakdown.push({ key:"byeclash", label:"Bye clash penalty", value:-byeClashPenalty, color:"#95a5a6" });
+      // Score breakdown for the stacked bar in the UI, plus the raw debug
+      // term dump below: both are purely debug-mode UI/log data (gated at
+      // render time, and logRecommendationSnapshot() is itself a no-op
+      // while S.draftLog is null with debug off) — skip building them
+      // altogether when debug mode is off. This runs for every candidate
+      // in the pool (up to 60) on every poll/recompute, so the allocation
+      // savings are real, not cosmetic.
+      let breakdown = null;
+      let debug = null;
+      if(S.debugMode){
+        // Same terms already computed above, just carried through instead
+        // of discarding them once they're folded into the single `score`
+        // number. Scarcity/value/lookahead are scaled by posModifier here
+        // (unlike the raw debug.*Term values below) so each segment
+        // reflects its actual contribution to `score`, and the segments
+        // sum exactly to `score` (bye-clash is the one negative term, so
+        // it's carried as a negative value rather than a bar segment).
+        breakdown = [
+          { key:"need", label:"Need", value: needTerm, color:"#4f8cff" },
+          { key:"urgency", label:"Urgency", value: urgencyTerm, color:"#8a5cf6" },
+          { key:"scarcity", label:"Scarcity", value:(scarcityScore * 2.2) * posModifier, color:"#f5a623" },
+          { key:"value", label:"Value", value:(normValue * 2.5) * posModifier, color:"#2ecc71" },
+          { key:"lookahead", label:"Lookahead", value:(lookaheadValue * LOOKAHEAD_WEIGHT) * posModifier, color:"#17a2b8" },
+        ];
+        if(criticalBonus > 0) breakdown.push({ key:"critical", label:"Critical-loss floor", value:criticalBonus, color:"#e74c3c" });
+        if(downsideRiskBonus > 0) breakdown.push({ key:"downside", label:"Steep drop-off", value:downsideRiskBonus, color:"#c0392b" });
+        if(stackBonus > 0) breakdown.push({ key:"stack", label:"Stack bonus", value:stackBonus, color:"#e91e63" });
+        if(handcuffBonus > 0) breakdown.push({ key:"handcuff", label:"Handcuff bonus", value:handcuffBonus, color:"#ffc107" });
+        if(byeClashPenalty > 0) breakdown.push({ key:"byeclash", label:"Bye clash penalty", value:-byeClashPenalty, color:"#95a5a6" });
 
-      return { 
-        player: p, 
-        score, 
-        survival, 
-        adpValue: rankValue, 
-        tags, 
-        need: needInfo.need, 
-        starterNeed: needInfo.starterNeed, 
-        benchNeed: needInfo.benchNeed,
-        benchCoverageNeed: needInfo.benchCoverageNeed,
-        balanceNeed: needInfo.balanceNeed,
-        parityNeed: needInfo.parityNeed,
-        critical: survival < 0.10 && needInfo.starterNeed > 0, // kept for display/debug only, no longer drives sort order
-        breakdown,
-        debug: {
+        debug = {
           needTerm: needTerm,
           urgencyTerm: urgencyTerm,
           scarcityTerm: scarcityScore * 2.2,
@@ -3344,7 +3350,24 @@
           hasMyRank: !!p.hasMyRank,
           adp: p.hasAdp ? p.adp : null,
           preModScore,
-        }
+        };
+      }
+
+      return { 
+        player: p, 
+        score, 
+        survival, 
+        adpValue: rankValue, 
+        tags, 
+        need: needInfo.need, 
+        starterNeed: needInfo.starterNeed, 
+        benchNeed: needInfo.benchNeed,
+        benchCoverageNeed: needInfo.benchCoverageNeed,
+        balanceNeed: needInfo.balanceNeed,
+        parityNeed: needInfo.parityNeed,
+        critical: survival < 0.10 && needInfo.starterNeed > 0, // kept for display/debug only, no longer drives sort order
+        breakdown,
+        debug,
       };
     });
 
@@ -3723,7 +3746,7 @@
     const container = $("recContainer");
     const badge = $("recBadge");
     if(S.mySlot == null){
-      container.innerHTML = '<div class="rec-empty">Enter your draft slot or username above to unlock personalized recommendations.</div>';
+      container.innerHTML = '<div class="rec-empty">Enter your draft slot above to unlock personalized recommendations.</div>';
       badge.textContent = "—";
       return;
     }
@@ -3827,10 +3850,11 @@
       if(r.nextRoundPreview && r.nextRoundPreview.length){
         const items = r.nextRoundPreview.map(nr => {
           const nrPct = Math.round(nr.survival2*100);
-          return '<b>'+esc(nr.player.name)+'</b> ('+esc(nr.player.position)+' '+nrPct+'%)';
-        }).join(', ');
+          return '<div class="rc-preview-item"><b>'+esc(nr.player.name)+'</b> ('+esc(nr.player.position)+' '+nrPct+'%)</div>';
+        }).join('');
         previewHtml = '<div class="rc-preview mono" title="Cheap preview only — reuses the existing simulation\'s pick-after-next survival numbers and a coarse need+value estimate, not a full re-score. Conditioned on the POSITION taken, not this specific player, so it reads the same across same-position options.">'
-          + 'if drafted &rarr; next-round options: '+items
+          + '<div class="rc-preview-label">if drafted &rarr; next-round options:</div>'
+          + '<div class="rc-preview-list">' + items + '</div>'
           + '</div>';
       }
       return '<div class="rec-card" style="--posc:'+color+'">'
@@ -3955,24 +3979,11 @@
     });
   }
 
-  async function resolveSlotFromUsername(username, draft){
-    try{
-      const user = await fetchJSON(SLEEPER_API+"/user/"+encodeURIComponent(username));
-      if(!user || !user.user_id) return null;
-      if(draft.draft_order && draft.draft_order[user.user_id] != null){
-        return draft.draft_order[user.user_id];
-      }
-      return null;
-    }catch(e){ return null; }
-  }
-
   async function connect(){
     clearError();
     const draftId = $("draftIdInput").value.trim();
     if(!draftId){ showError("Enter a draft ID first."); return; }
-    const username = $("usernameInput").value.trim();
     const slotVal = $("slotInput").value.trim();
-    S.scoring = $("scoringSelect").value;
 
     $("connectBtn").disabled = true;
     $("connectBtn").textContent = "Connecting…";
@@ -3989,10 +4000,6 @@
         } else {
           S.mySlot = n;
         }
-      } else if(username){
-        const resolved = await resolveSlotFromUsername(username, S.draft);
-        if(resolved) S.mySlot = resolved;
-        else showError("Couldn't find that username in this draft's order — enter your slot number manually.");
       }
       if(S.mySlot != null){
         S.myRosterId = S.slotToRosterId[S.mySlot] != null ? S.slotToRosterId[S.mySlot] : S.slotToRosterId[String(S.mySlot)];
@@ -4006,8 +4013,10 @@
       $("disconnectBtn").classList.remove("hidden");
       buildPosFilters();
 
-      initDraftLog();
-      await tryRestoreLogFolder();
+      if(S.debugMode){
+        initDraftLog();
+        await tryRestoreLogFolder();
+      }
 
       await pollPicks();
       S.currentPollMs = POLL_MS;
@@ -4029,7 +4038,7 @@
     // browser download. This mirrors the draft-completion finalize below,
     // so the log is never stranded in memory once the session ends —
     // "Save Log Now" remains available too, any time mid-draft.
-    if(S.draftLog && !S.logFinalized){
+    if(S.draftLog && !S.logFinalized && S.debugMode){
       S.logFinalized = true;
       flushDraftLog(true);
     }
@@ -4076,6 +4085,52 @@
     $("logDirChange").addEventListener("click", (e) => { e.preventDefault(); connectLogFolder(true); });
     $("logSaveBtn").addEventListener("click", () => flushDraftLog(true));
     $("draftIdInput").addEventListener("keydown", e => { if(e.key === "Enter") connect(); });
+
+    // My Slot should only ever hold a valid slot number for the draft
+    // being entered — i.e. 1..teams, wrapping instead of running past the
+    // end (12-team draft: ...11, 12, 1, 2...). Team count isn't known
+    // until the draft ID resolves, so look it up in the background
+    // (debounced, lightweight — just the /draft/{id} endpoint, not the
+    // full connect()-time league/roster fetch) purely to size the input;
+    // connect() still does its own authoritative fetch+validation.
+    let slotMaxTeams = null;
+    let slotLookupTimer = null;
+    const slotInputEl = $("slotInput");
+    const lookupSlotMax = () => {
+      const id = $("draftIdInput").value.trim();
+      slotMaxTeams = null;
+      slotInputEl.removeAttribute("max");
+      if(!id) return;
+      clearTimeout(slotLookupTimer);
+      slotLookupTimer = setTimeout(async () => {
+        try{
+          const draft = await fetchJSON(SLEEPER_API+"/draft/"+id);
+          const teams = (draft.settings && draft.settings.teams) || Object.keys(draft.slot_to_roster_id||{}).length;
+          if(teams && $("draftIdInput").value.trim() === id){
+            slotMaxTeams = teams;
+            slotInputEl.max = teams;
+          }
+        }catch(err){
+          // unresolved/invalid draft ID — leave unbounded, connect() will validate for real
+        }
+      }, 400);
+    };
+    $("draftIdInput").addEventListener("input", lookupSlotMax);
+
+    // Wrap rather than clamp: stepping past the top wraps to 1, stepping
+    // below 1 wraps to the last slot. Runs on every change so it also
+    // catches typed/pasted values, not just the native spinner arrows.
+    slotInputEl.addEventListener("input", () => {
+      if(!slotMaxTeams) return;
+      const raw = slotInputEl.value.trim();
+      if(!raw) return;
+      const n = Number(raw);
+      if(!Number.isInteger(n)) return;
+      if(n > slotMaxTeams || n < 1){
+        const wrapped = ((n - 1) % slotMaxTeams + slotMaxTeams) % slotMaxTeams + 1;
+        slotInputEl.value = wrapped;
+      }
+    });
     document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab)));
     $("searchInput").addEventListener("input", e => { S.searchQuery = e.target.value; renderBestAvailable(); });
     $("showDraftedCheckbox").addEventListener("change", e => { S.showDrafted = e.target.checked; renderBestAvailable(); });
@@ -4089,6 +4144,20 @@
       S.debugMode = e.target.checked;
       try{ localStorage.setItem("draftDeskDebugMode", S.debugMode ? "1" : "0"); }catch(err){ }
       applyDebugModeVisibility();
+      // Turning debug on mid-draft: start capturing from this point on
+      // (nothing before now was recorded). Turning it off: leave any
+      // already-captured log sitting in memory untouched, but the guards
+      // in pollPicks/flushDraftLog/connectLogFolder stop it from writing
+      // or downloading anything further while debug stays off.
+      if(S.debugMode && S.connected && !S.draftLog){
+        initDraftLog();
+        tryRestoreLogFolder();
+      }
+      // The cached recommendation pool carries whatever breakdown/debug
+      // state (built or skipped) matched the mode it was computed under —
+      // drop it so the next render recomputes fresh instead of serving a
+      // pool with null breakdown/debug now that debug is on (or vice versa).
+      S.recommendCache = null;
       renderRecommendations();
     });
 
@@ -4112,7 +4181,7 @@
       reader.onerror = () => setAdpStatus("couldn't read that file", false);
       reader.readAsText(file);
     });
-    loadCachedAdp();
+    loadAdpIndex();
 
     $("myRankCsvBtn").addEventListener("click", () => $("myRankCsvFile").click());
     $("myRankCsvFile").addEventListener("change", (e) => {
@@ -4130,7 +4199,7 @@
       reader.onerror = () => setMyRankStatus("couldn't read that file", false);
       reader.readAsText(file);
     });
-    loadCachedMyRank();
+    loadMyRankIndex();
   });
 })();
 </script>
