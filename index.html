@@ -494,12 +494,23 @@
   // not part of "balance") and nudges need up when this position is
   // relatively behind, down when it's relatively ahead. It's a soft,
   // additive tiebreaker, not a hard rule: BALANCE_WEIGHT keeps its
-  // contribution small next to real starter need, and BALANCE_NEED_CAP
+  // contribution meaningful next to real starter need, and BALANCE_NEED_CAP
   // bounds how far a single lopsided position can push it either way, so
   // it can tip a close call toward the thinner position without ever
   // forcing positions to equal counts or overriding a clearly better pick.
-  const BALANCE_WEIGHT = 0.45;
-  const BALANCE_NEED_CAP = 1.0;
+  //
+  // RAISED 2026-08-05: with the old cap of 1.0, a roster only had to drift
+  // moderately lopsided (e.g. QB ratio 1.0 vs. an average skill-position
+  // ratio of ~2.25) before the gap saturated the cap — every WR pick after
+  // that point got zero additional pushback, no matter how far the roster
+  // kept drifting (7 WRs felt identical to 4 WRs to this signal). Raising
+  // the cap to 2.0 lets severe imbalance keep escalating instead of
+  // flatlining, mirroring RBWR_PARITY_CAP (3.0) for the RB/WR-specific
+  // case. Weight raised alongside it, from 0.45 to 0.65 (closer to
+  // BENCH_COVERAGE_WEIGHT's 0.6), so the now-uncapped signal isn't the
+  // weakest contributor to needTerm once it's actually allowed to move.
+  const BALANCE_WEIGHT = 0.65;
+  const BALANCE_NEED_CAP = 2.0;
   // Skip the balance nudge until there's enough of a roster to say
   // anything meaningful — with only 1-2 skill-position picks made, "this
   // position is behind the others" is just noise (of course it is, you've
@@ -548,6 +559,107 @@
     return team ? (BYE_WEEKS_2026[team] || null) : null;
   }
   const BYE_CLASH_WEIGHT = 1.8; // score penalty per starter-slot short of bye-week coverage at one position
+  // Same slack-based easing as needPressure (see NEED_DECAY_ONSET below):
+  // a bye-week coverage gap is genuinely fixable at any point before the
+  // draft ends, so it shouldn't ding a pick at full weight in round 2 just
+  // because it dings one in round 14 — plenty of runway left means plenty
+  // of chances to patch it with a later, non-colliding pick. Floored lower
+  // than need's floor (0.4) since this is more of a "heads up" nudge than
+  // a mandatory-slot signal even at its least urgent.
+  const BYE_CLASH_SLACK_ONSET = 6;
+  const BYE_CLASH_PRESSURE_FLOOR = 0.15;
+  // Second, independent gate on top of the slack ramp above. endgameSlack
+  // subtracts ALL mandatory starter+bench slots from picks remaining, so in
+  // a deep-bench/short-roster league it can already read as "tight" by
+  // round 2 — before you've made enough picks for a single shared bye week
+  // to mean anything. Keyed directly to picks actually made (not slack, not
+  // round number derived from settings), so "round 2" stays soft on bye
+  // risk regardless of how aggressive the league's slot math looks this
+  // early. The two gates combine via min() below — full penalty weight
+  // requires BOTH plenty of picks made AND tight slack, not either alone.
+  const BYE_CLASH_MIN_PICKS_ONSET = 6;
+
+  // Bye-week coverage as a small max-flow problem instead of a per-position
+  // headcount check. Two things the old per-position comparison got wrong:
+  //   1. FLEX overlap — a bye-week RB gap can be absorbed by a healthy WR
+  //      (or vice versa) if you have an open FLEX slot, so RB/WR (and any
+  //      other flex-eligible group) shouldn't be scored as if they were
+  //      fully isolated silos.
+  //   2. It's genuinely about TOTAL non-bye bodies at a position (bench
+  //      included), not a separate "starters" bucket — a healthy 3rd-string
+  //      RB can slide into a starting spot vacated by two bye-week RBs.
+  //      `nonByeCounts` below is already whole-roster (see call site), so
+  //      this just needs to spend that supply correctly across direct +
+  //      flex demand instead of assuming zero overlap between them.
+  // Small graph (positions + flex groups, single-digit node counts), so a
+  // plain Edmonds-Karp max-flow is more than fast enough here.
+  function computeByeCoverageShortfall(nonByeCounts, starterTargetSnapshot, flexGroups){
+    const S_NODE = "S", T_NODE = "T";
+    const cap = {};
+    function addEdge(u, v, c){
+      if(c <= 0) return;
+      cap[u] = cap[u] || {};
+      cap[v] = cap[v] || {};
+      cap[u][v] = (cap[u][v] || 0) + c;
+      cap[v][u] = cap[v][u] || 0; // residual reverse edge
+    }
+    FANTASY_POS.forEach(pos => addEdge(S_NODE, "pos_" + pos, nonByeCounts[pos] || 0));
+    let totalSlots = 0;
+    FANTASY_POS.forEach(pos => {
+      const target = starterTargetSnapshot[pos] || 0;
+      if(target > 0){
+        addEdge("pos_" + pos, "direct_" + pos, target);
+        addEdge("direct_" + pos, T_NODE, target);
+        totalSlots += target;
+      }
+    });
+    (flexGroups || []).forEach((g, i) => {
+      const slots = g.slots || 0;
+      if(slots <= 0) return;
+      const node = "flex_" + i;
+      (g.eligible || []).forEach(pos => addEdge("pos_" + pos, node, slots));
+      addEdge(node, T_NODE, slots);
+      totalSlots += slots;
+    });
+    function bfsAugment(){
+      const parent = { [S_NODE]: null };
+      const queue = [S_NODE];
+      while(queue.length){
+        const u = queue.shift();
+        if(u === T_NODE) break;
+        const neighbors = cap[u] || {};
+        for(const v in neighbors){
+          if(!(v in parent) && neighbors[v] > 0){
+            parent[v] = u;
+            queue.push(v);
+          }
+        }
+      }
+      if(!(T_NODE in parent)) return 0;
+      let bottleneck = Infinity;
+      let cur = T_NODE;
+      while(parent[cur] != null){
+        bottleneck = Math.min(bottleneck, cap[parent[cur]][cur]);
+        cur = parent[cur];
+      }
+      cur = T_NODE;
+      while(parent[cur] != null){
+        const p = parent[cur];
+        cap[p][cur] -= bottleneck;
+        cap[cur][p] += bottleneck;
+        cur = p;
+      }
+      return bottleneck;
+    }
+    let maxFlow = 0;
+    let guard = 0; // small graph; this is just a sane upper bound on augmenting paths
+    while(guard++ < 500){
+      const added = bfsAugment();
+      if(added <= 0) break;
+      maxFlow += added;
+    }
+    return { covered: maxFlow, totalSlots, shortfall: Math.max(0, totalSlots - maxFlow) };
+  }
   // Small nudges for two well-known correlated-roster strategies. Both are
   // deliberately modest — these are "worth knowing about" signals, not
   // primary value drivers, so they shouldn't be able to move a much better
@@ -2769,6 +2881,37 @@
       });
     }
 
+    // Bye-week coverage cache: the flow computation above only depends on
+    // WHICH week we're checking (nonByeCounts is built from myCounts/
+    // myByeCounts, neither of which vary per-candidate), so solve it once
+    // per distinct bye week seen in the pool instead of once per candidate.
+    //
+    // Report the MARGINAL shortfall the bye itself causes, not the raw
+    // shortfall. Mid-draft, plenty of slots (K/DEF early, whatever you
+    // haven't gotten to yet) sit at zero supply simply because you haven't
+    // drafted them — that's a "not there yet" gap, not a bye-week gap, and
+    // it would otherwise show up identically at every candidate's bye week
+    // for the entire draft. Subtracting the shortfall you'd have anyway
+    // with nobody on bye (baseline, using total counts as supply) isolates
+    // what the bye week specifically costs you on top of that.
+    const flexGroupsSnapshot = getFlexGroups();
+    const byeCoverageCache = {};
+    const byeBaselineCoverage = computeByeCoverageShortfall(myCounts, starterTargetSnapshot, flexGroupsSnapshot);
+    function byeCoverageForWeek(week){
+      if(byeCoverageCache[week]) return byeCoverageCache[week];
+      const nonByeCounts = {};
+      FANTASY_POS.forEach(pos => {
+        const cnt = myCounts[pos] || 0;
+        const byeCnt = (myByeCounts[pos] && myByeCounts[pos][week]) || 0;
+        nonByeCounts[pos] = Math.max(0, cnt - byeCnt);
+      });
+      const actual = computeByeCoverageShortfall(nonByeCounts, starterTargetSnapshot, flexGroupsSnapshot);
+      const result = { covered: actual.covered, totalSlots: actual.totalSlots, shortfall: Math.max(0, actual.shortfall - byeBaselineCoverage.shortfall) };
+      byeCoverageCache[week] = result;
+      return result;
+    }
+
+
     const scored = candidatePool.map((p) => {
       const needInfo = positionNeedWeightFromCounts(myCounts, p.position);
       const survival = survivalRates[p.player_id] || 0;
@@ -3242,29 +3385,38 @@
         }
       }
 
-      // Bye-week coverage: every starter slot at a position should have a
-      // non-bye body to fill it on every single week — the actual test is
-      // "after this pick, how many of my ROSTERED players at this position
-      // are NOT on bye in week `byeWeek`", not just how many happen to
-      // share that one bye. A 2nd QB on the same bye as QB1 is fine if a
-      // 3rd, different-bye QB is also on the roster (still 1 non-bye body
-      // for a 1-slot need); a 3rd RB sharing a bye with your other two RBs
-      // is a real problem ONLY if it drops non-bye RBs below your starter
-      // count for that week. This doesn't account for FLEX overlap between
-      // RB/WR, so treat it as a heads-up rather than gospel.
+      // Bye-week coverage: every starter + FLEX slot should have a non-bye
+      // body able to fill it on every single week. This candidate is on
+      // bye that week too — drafting them does nothing to help week
+      // `byeWeek`, so the question is whether the REST of the roster
+      // (whole roster, bench included — see computeByeCoverageShortfall)
+      // can still fill every direct-position and FLEX-eligible slot that
+      // week. Solved as a small max-flow so FLEX overlap is respected: a
+      // bye-week RB gap can be absorbed by a healthy WR (or vice versa) if
+      // there's an open FLEX slot, instead of scoring RB/WR as isolated
+      // silos the way a flat per-position headcount check would.
+      //
+      // Eased by the same endgameSlack-based pressure ramp as needTerm
+      // (see BYE_CLASH_SLACK_ONSET above) — a shortfall spotted with lots
+      // of picks left is a mild heads-up, not a real problem yet, since
+      // there's plenty of draft left to pick it up with a non-colliding
+      // player later.
       const byeWeek = byeWeekForTeam(p.team);
       const byeCollisionCount = (byeWeek != null && myByeCounts[p.position]) ? (myByeCounts[p.position][byeWeek] || 0) : 0;
-      const posStarterSlots = Math.max(1, starterTargetSnapshot[p.position] || 1);
       let byeClashPenalty = 0;
       if(byeWeek != null){
-        const totalAtPosAfterPick = (myCounts[p.position] || 0) + 1;
-        const projectedCount = byeCollisionCount + 1; // this candidate is on bye that week too
-        const nonByeAfterPick = totalAtPosAfterPick - projectedCount;
-        if(nonByeAfterPick < posStarterSlots){
-          byeClashPenalty = BYE_CLASH_WEIGHT * (posStarterSlots - nonByeAfterPick);
+        const coverage = byeCoverageForWeek(byeWeek);
+        if(coverage.shortfall > 0){
+          const slackPressure = BYE_CLASH_PRESSURE_FLOOR + (1 - BYE_CLASH_PRESSURE_FLOOR) *
+            Math.max(0, Math.min(1, (BYE_CLASH_SLACK_ONSET - endgameSlack) / BYE_CLASH_SLACK_ONSET));
+          const picksMadePressure = BYE_CLASH_PRESSURE_FLOOR + (1 - BYE_CLASH_PRESSURE_FLOOR) *
+            Math.max(0, Math.min(1, picksIveMade / BYE_CLASH_MIN_PICKS_ONSET));
+          const byeClashPressure = Math.min(slackPressure, picksMadePressure);
+          byeClashPenalty = BYE_CLASH_WEIGHT * coverage.shortfall * byeClashPressure;
           score -= byeClashPenalty;
         }
       }
+
 
       // Stack: this player is a same-team pairing with a QB (or pass-
       // catcher) I already have — correlated scoring upside on big weeks.
@@ -3705,9 +3857,15 @@
 
         // 5b. Precompute same-position bye-week clashes for this specific
         // roster, so the bye badge can be highlighted when 2+ players at
-        // the same position share a week (same idea as the recommendation
-        // engine's bye-clash nudge, just surfaced here as a plain count
-        // rather than a scoring penalty).
+        // the same position share a week. Deliberately a plain headcount,
+        // not the recommendation engine's max-flow coverage check: that
+        // check flags a "shortfall" any time bench depth hasn't caught up
+        // to starter minimums yet, which is true of nearly every roster for
+        // most of the draft — it painted almost every bye badge red
+        // regardless of whether anyone actually overlapped. This badge is a
+        // quick visual scan across managers, so it should only light up for
+        // an actual overlap: 2+ of THIS manager's own players sharing the
+        // same week.
         const posByeCounts = {};
         players.forEach(p => {
             const wk = byeWeekForTeam(p.team);
