@@ -1036,7 +1036,9 @@
     const delim = lines[0].includes("\t") ? "\t" : ",";
     const header = splitDelimitedLine(lines[0], delim).map(h => h.trim().toUpperCase());
     
-    const rkIdx = findColumn(header, ["RANK", "RK"]);
+    // Prefer an explicit ADP column for ranking opponents; fall back to
+    // RANK/RK only when the CSV doesn't have one.
+    const rkIdx = findColumn(header, ["ADP", "RANK", "RK"]);
     const nameIdx = findColumn(header, ["NAME", "PLAYER NAME", "PLAYER"]);
     const teamIdx = findColumn(header, ["TEAM", "TM"]);
     const posIdx = findColumn(header, ["POSITION", "POS"]);
@@ -1047,7 +1049,7 @@
     for(let i=1;i<lines.length;i++){
       const cols = splitDelimitedLine(lines[i], delim);
       const rawName = (cols[nameIdx]||"").trim();
-      const rk = parseInt(cols[rkIdx], 10);
+      const rk = parseFloat(cols[rkIdx]);
       if(!rawName || isNaN(rk)) continue;
       rows.push({
         rk,
@@ -1063,7 +1065,10 @@
   const ADP_CACHE_KEY = "draftDesk_adpCsv_v1";
   function buildAdpIndex(rows){
     const byNorm = new Map();
-    rows.forEach(r => { if(!byNorm.has(r.norm)) byNorm.set(r.norm, r); });
+    rows.forEach(r => {
+      if(!byNorm.has(r.norm)) byNorm.set(r.norm, []);
+      byNorm.get(r.norm).push(r);
+    });
     return { rows, byNorm };
   }
   function setAdpStatus(text, ok){
@@ -1216,12 +1221,49 @@
     setMyRankStatus("not loaded — using ADP", false);
     return null;
   }
+  function pickBestCandidate(candidates, ctx){
+    if(candidates.length === 1) return candidates[0];
+    const teamAbbr = ctx && ctx.team ? String(ctx.team).toUpperCase() : null;
+    const posAbbr = ctx && ctx.position ? String(ctx.position).toUpperCase() : null;
+    const posMatches = (rowPos, wantPos) => {
+      if(!rowPos || !wantPos) return false;
+      if(wantPos === "DEF") return rowPos === "DEF" || rowPos === "DST";
+      return rowPos === wantPos;
+    };
+    // Multiple rows share this name — team is the disambiguator. If we know
+    // the player's team, ONLY a row with that exact team can be returned;
+    // we never guess and risk stealing another player's ADP row.
+    if(teamAbbr){
+      const teamRows = candidates.filter(row => (row.team||"").toUpperCase() === teamAbbr);
+      if(!teamRows.length) return null;
+      if(teamRows.length === 1) return teamRows[0];
+      // Same name AND same team (rare) — narrow further by position if we can.
+      if(posAbbr){
+        const both = teamRows.find(row => posMatches((row.position||"").toUpperCase(), posAbbr));
+        if(both) return both;
+      }
+      return teamRows[0];
+    }
+    // No team on this player (shouldn't normally happen) — fall back to position.
+    if(posAbbr){
+      const byPos = candidates.find(row => posMatches((row.position||"").toUpperCase(), posAbbr));
+      if(byPos) return byPos;
+    }
+    return null;
+  }
   function matchAdp(playerName, adpIndex, ctx){
     if(!adpIndex || !adpIndex.rows.length) return null;
     const norm = normName(playerName);
     if(!norm) return null;
-    const exact = adpIndex.byNorm.get(norm);
-    if(exact) return exact;
+    const exactCandidates = adpIndex.byNorm.get(norm);
+    if(exactCandidates && exactCandidates.length){
+      const picked = pickBestCandidate(exactCandidates, ctx);
+      // Only trust the exact-name match when it's unambiguous (single row)
+      // or we resolved it via a confirmed team match. Otherwise fall
+      // through to the team-constrained fuzzy search below rather than
+      // risk handing back another player's ADP row.
+      if(picked) return picked;
+    }
 
     if(ctx && ctx.position === "DEF" && ctx.team){
       const teamAbbr = String(ctx.team).toUpperCase();
@@ -1233,18 +1275,30 @@
       if(byTeam) return byTeam;
     }
 
+    const ctxTeam = ctx && ctx.team ? String(ctx.team).toUpperCase() : null;
     const q = splitNameParts(norm);
     let best = null, bestScore = 0;
     for(const row of adpIndex.rows){
+      // If we know the player's team and this row has a team on it, they
+      // must match exactly — otherwise a near-identical name on another
+      // team can steal the wrong ADP row.
+      if(ctxTeam && row.team && String(row.team).toUpperCase() !== ctxTeam) continue;
       const r = splitNameParts(row.norm);
-      if(nameSimilarity(q.last, r.last) < 0.9) continue;
+      const lastSim = nameSimilarity(q.last, r.last);
+      if(lastSim < 0.9) continue;
       const isPrefixPair = q.first.length >= 3 && r.first.length >= 3 &&
         (q.first.startsWith(r.first) || r.first.startsWith(q.first));
+      // Treat a single-letter first name as an initial (e.g. "B" matches "Bijan")
+      const isInitialPair = (q.first.length === 1 || r.first.length === 1) &&
+        q.first[0] === r.first[0];
       const firstOk = (q.first === "" && r.first === "")
         ? true
-        : (isPrefixPair || nameSimilarity(q.first, r.first) >= 0.7);
+        : (isInitialPair || isPrefixPair || nameSimilarity(q.first, r.first) >= 0.7);
       if(!firstOk) continue;
-      const score = nameSimilarity(norm, row.norm);
+      const firstSim = isInitialPair ? 1 : nameSimilarity(q.first, r.first);
+      // Weight last-name similarity more heavily so initials (which shrink
+      // the compared string) don't get unfairly penalized vs. full first names
+      const score = (lastSim * 0.7) + (firstSim * 0.3);
       if(score > bestScore){ bestScore = score; best = row; }
     }
     if(best && bestScore >= FUZZY_MATCH_THRESHOLD) return best;
