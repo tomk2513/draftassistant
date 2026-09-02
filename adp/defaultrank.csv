@@ -5,7 +5,7 @@ Rank,Name,Team,Position,ADP
 4,J. Taylor,IND,RB,5
 5,P. Nacua,LAR,WR,7
 6,C. McCaffrey,SF,RB,4
-7,A. St. Brown,DET,WR,6
+7,Amon-Ra St. Brown,DET,WR,6
 8,J. Smith-Njigba,SEA,WR,8
 9,S. Barkley,PHI,RB,10
 10,J. Cook III,BUF,RB,9
@@ -14,7 +14,7 @@ Rank,Name,Team,Position,ADP
 13,D. Achane,MIA,RB,13
 14,D. Henry,BAL,RB,16
 15,C. Brown,CIN,RB,17
-16,K. Walker II,IKC,RB,18
+16,K. Walker II,KC,RB,18
 17,O. Hampton,LAC,RB,15
 18,N. Collins,HOU,WR,23
 19,A. Jeanty,LV,RB,14
@@ -53,7 +53,7 @@ Rank,Name,Team,Position,ADP
 52,Q. Judkins,CLE,RB,49
 53,J. Price,SEA,RB,57
 54,J. Burrow,CIN,QB,54
-55,B. Tuten,JAC,RB,59
+55,B. Tuten,JAX,RB,59
 56,L. Burden III,CHI,WR,60
 57,D. Adams,LAR,WR,56
 58,J. Hurts,PHI,QB,61
@@ -66,7 +66,7 @@ Rank,Name,Team,Position,ADP
 65,J. Warren,PIT,RB,67
 66,R. Stevenson,NE,RB,73
 67,S. LaPorta,DET,TE,64
-68,P. Washington,JAC,WR,69
+68,P. Washington,JAX,WR,69
 69,M. Evans,SF,WR,63
 70,C. Williams,CHI,QB,74
 71,M. Harrison Jr.,ARI,WR,72
@@ -80,10 +80,10 @@ Rank,Name,Team,Position,ADP
 79,G. Kittle,SF,TE,85
 80,DK Metcalf,PIT,WR,76
 81,R. Dowdle,PIT,RB,83
-82,B. Thomas Jr.,JAC,WR,75
+82,B. Thomas Jr.,JAX,WR,75
 83,M. Lloyd,GB,RB,136
 84,J.K. Dobbins,DEN,RB,86
-85,T. Lawrence,JAC,QB,97
+85,T. Lawrence,JAX,QB,97
 86,C. Godwin Jr.,TB,WR,91
 87,A. Pierce,IND,WR,95
 88,C. Hubbard,CAR,RB,79
@@ -121,8 +121,8 @@ Rank,Name,Team,Position,ADP
 120,M. Andrews,BAL,TE,122
 121,Broncos,DEN,DST,121
 122,Seahawks,SEA,DST,115
-123,P. Mahomes I,IKC,QB,114
-124,C. Rodriguez Jr.,JAC,RB,125
+123,P. Mahomes I,KC,QB,114
+124,C. Rodriguez Jr.,JAX,RB,125
 125,W. Robinson,TEN,WR,118
 126,J. Goff,DET,QB,143
 127,R. White,WAS,RB,123
@@ -132,7 +132,7 @@ Rank,Name,Team,Position,ADP
 131,X. Worthy,KC,WR,127
 132,K. Fairbairn,HOU,K,140
 133,Eagles,PHI,DST,130
-134,J. Meyers,JAC,WR,129
+134,J. Meyers,JAX,WR,129
 135,J. Myers,SEA,K,139
 136,J. Coker,CAR,WR,145
 137,T. Allgeier,ARI,RB,133
@@ -150,13 +150,13 @@ Rank,Name,Team,Position,ADP
 149,Patriots,NE,DST,134
 150,K. Shakir,BUF,WR,152
 151,J. Coleman,DEN,RB,146
-152,C. Little,JAC,K,144
+152,C. Little,JAX,K,144
 153,T. Bigsby,PHI,RB,162
 154,Vikings,MIN,DST,155
 155,H. Henry,NE,TE,149
 156,B. Mayfield,TB,QB,154
 157,D. Schultz,HOU,TE,208
-158,Jaguars,JAC,DST,157
+158,Jaguars,JAX,DST,157
 159,J. Lane,BAL,WR,147
 160,M. Willis,MIA,QB,192
 161,T. Tucker,LV,WR,181
@@ -166,7 +166,7 @@ Rank,Name,Team,Position,ADP
 165,T. Shough,NO,QB,189
 166,K. Allen,IND,WR,177
 168,D. Boston,CLE,WR,172
-169,B. Strange,JAC,TE,168
+169,B. Strange,JAX,TE,168
 170,A. Kamara,NO,RB,156
 171,T. Loop,BAL,K,191
 172,C. Okonkwo,WAS,TE,193
@@ -193,7 +193,7 @@ Rank,Name,Team,Position,ADP
 193,Lions,DET,DST,175
 194,T.J. Hockenson,MIN,TE,183
 195,A. Mitchell,NYJ,WR,227
-196,T. Hunter,JAC,WR,187
+196,T. Hunter,JAX,WR,187
 197,J. Noel,HOU,WR,—
 198,D. Jones,IND,QB,222
 199,G. Dulcich,MIA,TE,250
@@ -243,7 +243,7 @@ Rank,Name,Team,Position,ADP
 243,C. Brooks,GB,RB,—
 244,N. Harris,NYG,RB,—
 245,J. Wright,MIA,RB,228
-246,T. HillFA (),FA,WR,237
+246,T. Hill,FA,WR,237
 247,K. Allen,WAS,RB,240
 248,D. Waller,CAR,TE,—
 249,P. Freiermuth,PIT,TE,230
@@ -260,7 +260,7 @@ Rank,Name,Team,Position,ADP
 260,J. Elliott,PHI,K,—
 261,J. Hill,BAL,RB,221
 262,G. Holani,SEA,RB,—
-263,T. Hurst II,ITB,WR,244
+263,T. Hurst II,TB,WR,244
 264,Packers,GB,DST,205
 265,N. Singleton,TEN,RB,212
 266,J. James,SF,RB,224
